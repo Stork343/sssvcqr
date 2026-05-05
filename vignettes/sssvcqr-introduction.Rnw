@@ -1,0 +1,64 @@
+%\VignetteIndexEntry{Getting Started with sssvcqr}
+%\VignetteEngine{knitr::knitr}
+%\VignetteEncoding{UTF-8}
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\title{Getting Started with sssvcqr}
+\author{Houjian Hou}
+\begin{document}
+\maketitle
+
+This vignette shows the basic workflow for sparse-smooth spatially varying
+coefficient quantile regression.
+
+<<setup, include=FALSE>>=
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+@
+
+<<fit-example>>=
+library(sssvcqr)
+
+dat <- simulate_sssvcqr_data(n = 70, q = 1, p = 2, seed = 1)
+
+fit <- ss_svcqr(
+  y = dat$y,
+  Z = dat$Z,
+  X = dat$X,
+  u = dat$u,
+  tau = 0.5,
+  lambda1 = 2,
+  lambda2 = 1,
+  k_nn = 6,
+  control = list(max_iter = 40, warn_nonconvergence = FALSE)
+)
+
+fit
+summary(fit)
+head(predict(fit))
+head(predict(fit, type = "coefficients"))
+@
+
+Penalty parameters can be selected by spatially blocked cross-validation. The
+small grid below is for demonstration; empirical applications should use a
+broader grid and more iterations.
+
+<<cv-example>>=
+cv <- cv_ss_svcqr(
+  y = dat$y,
+  Z = dat$Z,
+  X = dat$X,
+  u = dat$u,
+  tau = 0.5,
+  lambda1_seq = c(1, 2),
+  lambda2_seq = c(0.5, 1),
+  K_folds = 3,
+  adaptive_weights = FALSE,
+  control = list(max_iter = 25, warn_nonconvergence = FALSE)
+)
+
+cv
+cv$best
+@
+
+\end{document}

@@ -1,0 +1,22 @@
+{
+  "title": "sssvcqr: Sparse-Smooth Spatially Varying Coefficient Quantile Regression",
+  "upload_type": "software",
+  "description": "R package implementing sparse-smooth spatially varying coefficient quantile regression with graph-regularized ADMM estimation, spatially blocked cross-validation, prediction, plotting, diagnostics, and simulation helpers.",
+  "creators": [
+    {
+      "name": "Hou, Houjian",
+      "affiliation": "Center for Applied Statistics, School of Statistics, Renmin University of China"
+    }
+  ],
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "R",
+    "quantile regression",
+    "spatial statistics",
+    "varying coefficient model",
+    "graph regularization",
+    "ADMM"
+  ],
+  "access_right": "open"
+}
+

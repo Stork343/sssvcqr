@@ -1,0 +1,56 @@
+%\VignetteIndexEntry{Lucas County Housing Example}
+%\VignetteEngine{knitr::knitr}
+%\VignetteEncoding{UTF-8}
+\documentclass{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{hyperref}
+\title{Lucas County Housing Example}
+\author{Houjian Hou}
+\begin{document}
+\maketitle
+
+This vignette illustrates the package interface on a small sample of the Lucas
+County housing data. The full empirical analysis for the paper should be run
+from the reproducibility scripts, not from this lightweight example.
+
+<<setup, include=FALSE>>=
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+@
+
+<<lucas-fit>>=
+library(sssvcqr)
+
+data(lucas_housing_sample)
+housing <- lucas_housing_sample
+
+y <- housing$log_price
+Z <- model.matrix(~ log_TLA + log_lotsize + sale_year, data = housing)
+X <- as.matrix(housing[, c("age_scaled", "age2_scaled")])
+u <- as.matrix(housing[, c("longitude", "latitude")])
+u <- scale(u)
+
+fit <- ss_svcqr(
+  y = y,
+  Z = Z,
+  X = X,
+  u = u,
+  tau = 0.5,
+  lambda1 = 3,
+  lambda2 = 1,
+  k_nn = 8,
+  control = list(max_iter = 40, warn_nonconvergence = FALSE)
+)
+
+summary(fit)
+@
+
+The coefficient surface returned by \verb|predict(type = "coefficients")| gives
+the local total effect for each candidate spatially varying covariate.
+
+<<lucas-coef>>=
+local_coef <- predict(fit, type = "coefficients")
+head(local_coef)
+colMeans(local_coef)
+@
+
+\end{document}

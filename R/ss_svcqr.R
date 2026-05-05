@@ -1,0 +1,743 @@
+.as_matrix <- function(x, n = NULL, name = deparse(substitute(x))) {
+  x <- as.matrix(x)
+  if (!is.null(n) && nrow(x) != n) {
+    stop(name, " must have ", n, " rows.", call. = FALSE)
+  }
+  storage.mode(x) <- "double"
+  x
+}
+
+.sparse_diagonal <- function(n, x = 1.0) {
+  Matrix::Diagonal(n = n, x = x)
+}
+
+check_loss_vec <- function(r, tau) {
+  r * (tau - as.numeric(r < 0))
+}
+
+make_spatial_folds <- function(u,
+                               K = 5L,
+                               method = c("kmeans", "grid"),
+                               seed = NULL) {
+  method <- match.arg(method)
+  u <- .as_matrix(u, name = "u")
+  n <- nrow(u)
+  if (K < 2L || K > n) {
+    stop("K must be between 2 and the number of observations.", call. = FALSE)
+  }
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
+  if (method == "kmeans") {
+    stats::kmeans(u, centers = K, nstart = 10L)$cluster
+  } else {
+    Kx <- floor(sqrt(K))
+    Ky <- ceiling(K / Kx)
+    x_breaks <- unique(stats::quantile(u[, 1L], probs = seq(0, 1, length.out = Kx + 1L)))
+    y_breaks <- unique(stats::quantile(u[, 2L], probs = seq(0, 1, length.out = Ky + 1L)))
+    if (length(x_breaks) < 2L || length(y_breaks) < 2L) {
+      return(stats::kmeans(u, centers = K, nstart = 10L)$cluster)
+    }
+    ix <- cut(u[, 1L], breaks = x_breaks, include.lowest = TRUE, labels = FALSE)
+    iy <- cut(u[, 2L], breaks = y_breaks, include.lowest = TRUE, labels = FALSE)
+    folds <- as.integer((ix - 1L) * Ky + iy)
+    old <- sort(unique(folds))
+    map <- rep(seq_len(K), length.out = length(old))
+    as.integer(map[match(folds, old)])
+  }
+}
+
+build_graph_laplacian <- function(u,
+                                  k = 10L,
+                                  normalized = TRUE,
+                                  symmetrize = c("union", "mutual"),
+                                  sigma = NULL) {
+  symmetrize <- match.arg(symmetrize)
+  u <- .as_matrix(u, name = "u")
+  n <- nrow(u)
+  if (n < 2L) {
+    stop("u must contain at least two locations.", call. = FALSE)
+  }
+  k <- max(1L, min(as.integer(k), n - 1L))
+
+  dmat <- as.matrix(stats::dist(u))
+  positive_d2 <- dmat[dmat > 0]^2
+  sigma2 <- if (is.null(sigma)) stats::median(positive_d2) else sigma^2
+  if (!is.finite(sigma2) || sigma2 <= 0) {
+    sigma2 <- 1
+  }
+
+  W_directed <- matrix(0, nrow = n, ncol = n)
+  for (i in seq_len(n)) {
+    nn_id <- order(dmat[i, ], decreasing = FALSE)[seq.int(2L, k + 1L)]
+    W_directed[i, nn_id] <- exp(-dmat[i, nn_id]^2 / sigma2)
+  }
+
+  W <- if (symmetrize == "union") {
+    pmax(W_directed, t(W_directed))
+  } else {
+    pmin(W_directed, t(W_directed))
+  }
+  diag(W) <- 0
+
+  D_vec <- rowSums(W)
+  if (normalized) {
+    inv_sqrt_d <- ifelse(D_vec > 0, 1 / sqrt(D_vec), 0)
+    L <- diag(n) - (W * inv_sqrt_d) * rep(inv_sqrt_d, each = n)
+  } else {
+    L <- diag(D_vec) - W
+  }
+
+  L_sp <- Matrix::Matrix(L, sparse = TRUE)
+  L_sp <- Matrix::forceSymmetric(L_sp)
+  L_sp <- methods::as(L_sp, "dsCMatrix")
+
+  graph <- igraph::graph_from_adjacency_matrix(
+    W,
+    mode = "undirected",
+    weighted = TRUE,
+    diag = FALSE
+  )
+  comp <- igraph::components(graph)$membership
+  components_list <- split(seq_len(n), comp)
+
+  list(
+    W = W,
+    D_vec = D_vec,
+    L_sym = L_sp,
+    L = L_sp,
+    components_list = components_list,
+    k = k,
+    sigma = sqrt(sigma2),
+    normalized = normalized,
+    symmetrize = symmetrize
+  )
+}
+
+project_D_centered <- function(v, D_vec, components_list) {
+  v_proj <- as.numeric(v)
+  for (comp_idx in components_list) {
+    D_comp <- D_vec[comp_idx]
+    denom <- sum(D_comp)
+    if (denom > 0) {
+      v_proj[comp_idx] <- v_proj[comp_idx] - sum(D_comp * v_proj[comp_idx]) / denom
+    } else {
+      v_proj[comp_idx] <- v_proj[comp_idx] - mean(v_proj[comp_idx])
+    }
+  }
+  v_proj
+}
+
+prox_check <- function(v, gamma, tau) {
+  pmin(pmax(v - gamma * tau, 0), v + gamma * (1 - tau))
+}
+
+group_shrink <- function(v, kappa) {
+  v_norm <- sqrt(sum(v^2))
+  if (v_norm == 0 || v_norm <= kappa) {
+    return(rep(0, length(v)))
+  }
+  (1 - kappa / v_norm) * v
+}
+
+ss_svcqr <- function(y,
+                     Z,
+                     X,
+                     u,
+                     tau = 0.5,
+                     lambda1,
+                     lambda2,
+                     k_nn = 10L,
+                     w = NULL,
+                     control = list(),
+                     graph_normalized = TRUE,
+                     graph_symmetrize = c("union", "mutual"),
+                     graph_sigma = NULL) {
+  graph_symmetrize <- match.arg(graph_symmetrize)
+  y <- as.numeric(y)
+  n <- length(y)
+  if (n < 2L) {
+    stop("y must contain at least two observations.", call. = FALSE)
+  }
+  if (!is.numeric(tau) || length(tau) != 1L || tau <= 0 || tau >= 1) {
+    stop("tau must be a scalar in (0, 1).", call. = FALSE)
+  }
+  if (missing(lambda1) || missing(lambda2) || lambda1 < 0 || lambda2 < 0) {
+    stop("lambda1 and lambda2 must be non-negative scalars.", call. = FALSE)
+  }
+
+  Z <- if (missing(Z) || is.null(Z)) matrix(nrow = n, ncol = 0L) else .as_matrix(Z, n, "Z")
+  X <- .as_matrix(X, n, "X")
+  u <- .as_matrix(u, n, "u")
+  q <- ncol(Z)
+  p <- ncol(X)
+  if (p < 1L) {
+    stop("X must contain at least one potentially local covariate.", call. = FALSE)
+  }
+  if (nrow(u) != n || ncol(u) < 2L) {
+    stop("u must be an n x d coordinate matrix with d >= 2.", call. = FALSE)
+  }
+
+  if (is.null(w)) {
+    w <- rep(1, p)
+  }
+  w <- as.numeric(w)
+  if (length(w) != p || any(!is.finite(w)) || any(w < 0)) {
+    stop("w must be a non-negative numeric vector with length ncol(X).", call. = FALSE)
+  }
+
+  ctrl <- list(
+    max_iter = 500L,
+    tol_pri = 1e-4,
+    tol_dual = 1e-3,
+    rho_s = 1,
+    rho_z = 1,
+    ridge = 1e-6,
+    warn_nonconvergence = TRUE
+  )
+  ctrl[names(control)] <- control
+  ctrl$max_iter <- as.integer(ctrl$max_iter)
+
+  graph_data <- build_graph_laplacian(
+    u,
+    k = k_nn,
+    normalized = graph_normalized,
+    symmetrize = graph_symmetrize,
+    sigma = graph_sigma
+  )
+  L_sym <- graph_data$L_sym
+  D_vec <- graph_data$D_vec
+  components_list <- graph_data$components_list
+
+  alpha <- rep(0, q)
+  beta_G <- rep(0, p)
+  delta <- matrix(0, nrow = n, ncol = p)
+  s <- rep(0, n)
+  z <- matrix(0, nrow = n, ncol = p)
+  u_dual <- rep(0, n)
+  v_dual <- matrix(0, nrow = n, ncol = p)
+
+  G <- cbind(Z, X)
+  GtG <- crossprod(G)
+  L_cholesky <- tryCatch(
+    chol(GtG),
+    error = function(e) chol(GtG + diag(ctrl$ridge, nrow = q + p))
+  )
+
+  Aj_chol_list <- vector("list", p)
+  for (j in seq_len(p)) {
+    A_j <- 2 * lambda2 * L_sym +
+      ctrl$rho_s * .sparse_diagonal(n, X[, j]^2) +
+      ctrl$rho_z * .sparse_diagonal(n, 1)
+    Aj_chol_list[[j]] <- tryCatch(
+      Matrix::Cholesky(A_j, LDL = FALSE),
+      error = function(e) Matrix::Cholesky(A_j + ctrl$ridge * .sparse_diagonal(n, 1), LDL = FALSE)
+    )
+  }
+
+  history <- list(
+    r_norm_s = rep(NA_real_, ctrl$max_iter),
+    r_norm_z = rep(NA_real_, ctrl$max_iter),
+    d_norm_s = rep(NA_real_, ctrl$max_iter),
+    d_norm_z = rep(NA_real_, ctrl$max_iter)
+  )
+
+  eps_abs <- ctrl$tol_pri
+  eps_rel <- ctrl$tol_dual
+  converged <- FALSE
+
+  for (iter in seq_len(ctrl$max_iter)) {
+    s_prev <- s
+    z_prev <- z
+    X_delta_all <- rowSums(X * delta)
+
+    b_rhs_vec <- y - X_delta_all - s + u_dual
+    Gt_b_rhs <- crossprod(G, b_rhs_vec)
+    theta_P <- backsolve(L_cholesky, backsolve(L_cholesky, Gt_b_rhs, transpose = TRUE))
+
+    if (q > 0L) {
+      alpha <- as.numeric(theta_P[seq_len(q)])
+    }
+    beta_G <- as.numeric(theta_P[seq.int(q + 1L, q + p)])
+
+    Z_alpha <- if (q > 0L) as.numeric(Z %*% alpha) else rep(0, n)
+    X_beta_G <- as.numeric(X %*% beta_G)
+
+    v_s <- y - Z_alpha - X_beta_G - X_delta_all + u_dual
+    s <- prox_check(v_s, 1 / ctrl$rho_s, tau)
+
+    for (j in seq_len(p)) {
+      X_delta_minus_j <- X_delta_all - X[, j] * delta[, j]
+      resid_j <- y - Z_alpha - X_beta_G - X_delta_minus_j - s + u_dual
+      b_j <- ctrl$rho_s * (X[, j] * resid_j) + ctrl$rho_z * (z[, j] - v_dual[, j])
+
+      delta[, j] <- as.numeric(Matrix::solve(Aj_chol_list[[j]], b_j))
+      delta[, j] <- project_D_centered(delta[, j], D_vec, components_list)
+      X_delta_all <- X_delta_minus_j + X[, j] * delta[, j]
+
+      z[, j] <- group_shrink(delta[, j] + v_dual[, j], lambda1 * w[j] / ctrl$rho_z)
+      z[, j] <- project_D_centered(z[, j], D_vec, components_list)
+    }
+
+    r_s_vec <- y - Z_alpha - X_beta_G - X_delta_all - s
+    u_dual <- u_dual + r_s_vec
+
+    r_z_mat <- delta - z
+    v_dual <- v_dual + r_z_mat
+
+    history$r_norm_s[iter] <- sqrt(sum(r_s_vec^2))
+    history$r_norm_z[iter] <- sqrt(sum(r_z_mat^2))
+    history$d_norm_s[iter] <- ctrl$rho_s * sqrt(sum((s - s_prev)^2))
+    history$d_norm_z[iter] <- sqrt(sum((ctrl$rho_z * (z - z_prev))^2))
+
+    norm_Ax_s <- sqrt(sum((y - Z_alpha - X_beta_G - X_delta_all)^2))
+    norm_Bz_s <- sqrt(sum(s^2))
+    eps_pri_s <- sqrt(n) * eps_abs + eps_rel * max(norm_Ax_s, norm_Bz_s)
+    eps_dual_s <- sqrt(n) * eps_abs + eps_rel * sqrt(sum((ctrl$rho_s * u_dual)^2))
+
+    norm_delta <- sqrt(sum(delta^2))
+    norm_z <- sqrt(sum(z^2))
+    eps_pri_z <- sqrt(n * p) * eps_abs + eps_rel * max(norm_delta, norm_z)
+    eps_dual_z <- sqrt(n * p) * eps_abs + eps_rel * sqrt(sum((ctrl$rho_z * as.vector(v_dual))^2))
+
+    if (iter > 1L &&
+        history$r_norm_s[iter] < eps_pri_s &&
+        history$r_norm_z[iter] < eps_pri_z &&
+        history$d_norm_s[iter] < eps_dual_s &&
+        history$d_norm_z[iter] < eps_dual_z) {
+      converged <- TRUE
+      break
+    }
+  }
+
+  if (!converged && isTRUE(ctrl$warn_nonconvergence)) {
+    warning("ADMM reached max_iter without satisfying the stopping rule.", call. = FALSE)
+  }
+
+  delta <- z
+  delta[abs(delta) < 1e-8] <- 0
+  beta_spatial <- matrix(beta_G, nrow = n, ncol = p, byrow = TRUE) + delta
+  fitted_values <- as.numeric(if (q > 0L) Z %*% alpha else rep(0, n)) +
+    as.numeric(X %*% beta_G) + rowSums(X * delta)
+
+  history <- lapply(history, function(x) x[seq_len(iter)])
+
+  out <- list(
+    alpha = alpha,
+    beta_G = beta_G,
+    delta = delta,
+    beta_spatial = beta_spatial,
+    fitted.values = fitted_values,
+    residuals = y - fitted_values,
+    tau = tau,
+    lambda1 = lambda1,
+    lambda2 = lambda2,
+    weights = w,
+    iterations = iter,
+    converged = converged,
+    convergence_history = history,
+    graph = list(
+      k = graph_data$k,
+      sigma = graph_data$sigma,
+      normalized = graph_data$normalized,
+      symmetrize = graph_data$symmetrize
+    ),
+    u = u,
+    n = n,
+    q = q,
+    p = p,
+    call = match.call()
+  )
+  class(out) <- "sssvcqr"
+  out
+}
+
+predict.sssvcqr <- function(object,
+                            Znew = NULL,
+                            Xnew = NULL,
+                            unew = NULL,
+                            k = 1L,
+                            type = c("response", "coefficients"),
+                            ...) {
+  type <- match.arg(type)
+  if (is.null(Xnew)) {
+    if (type == "coefficients") {
+      return(object$beta_spatial)
+    }
+    return(object$fitted.values)
+  }
+
+  Xnew <- .as_matrix(Xnew, name = "Xnew")
+  n_new <- nrow(Xnew)
+  if (ncol(Xnew) != object$p) {
+    stop("Xnew must have ", object$p, " columns.", call. = FALSE)
+  }
+  Znew <- if (object$q == 0L) {
+    matrix(nrow = n_new, ncol = 0L)
+  } else if (is.null(Znew)) {
+    stop("Znew is required because the fitted model has global Z covariates.", call. = FALSE)
+  } else {
+    .as_matrix(Znew, n_new, "Znew")
+  }
+
+  if (is.null(unew)) {
+    if (n_new == nrow(object$delta)) {
+      delta_new <- object$delta
+    } else {
+      stop("unew is required for prediction at new locations.", call. = FALSE)
+    }
+  } else {
+    unew <- .as_matrix(unew, n_new, "unew")
+    k <- max(1L, min(as.integer(k), nrow(object$u)))
+    nn <- FNN::get.knnx(data = object$u, query = unew, k = k)
+    idx <- if (k == 1L) {
+      nn$nn.index[, 1L]
+    } else {
+      nn$nn.index[, 1L]
+    }
+    delta_new <- object$delta[idx, , drop = FALSE]
+  }
+
+  beta_local <- matrix(object$beta_G, nrow = n_new, ncol = object$p, byrow = TRUE) + delta_new
+  if (type == "coefficients") {
+    return(beta_local)
+  }
+  as.numeric(if (object$q > 0L) Znew %*% object$alpha else rep(0, n_new)) +
+    rowSums(Xnew * beta_local)
+}
+
+fitted.sssvcqr <- function(object, ...) {
+  object$fitted.values
+}
+
+residuals.sssvcqr <- function(object, ...) {
+  object$residuals
+}
+
+coef.sssvcqr <- function(object, ...) {
+  list(alpha = object$alpha, beta_G = object$beta_G, delta = object$delta)
+}
+
+plot.sssvcqr <- function(x,
+                         type = c("deviation", "coefficient", "residual", "convergence"),
+                         index = 1L,
+                         ...) {
+  type <- match.arg(type)
+  index <- as.integer(index)[1L]
+
+  if (type %in% c("deviation", "coefficient") && (index < 1L || index > x$p)) {
+    stop("index must be between 1 and the number of candidate local covariates.", call. = FALSE)
+  }
+
+  if (type == "convergence") {
+    history <- x$convergence_history
+    history <- lapply(history, function(v) pmax(v, .Machine$double.eps))
+    ylim <- range(unlist(history), finite = TRUE)
+    graphics::plot(
+      seq_along(history$r_norm_s), history$r_norm_s,
+      type = "l", log = "y", ylim = ylim,
+      xlab = "Iteration", ylab = "Residual norm",
+      main = "ADMM convergence", ...
+    )
+    graphics::lines(seq_along(history$r_norm_z), history$r_norm_z, lty = 2)
+    graphics::lines(seq_along(history$d_norm_s), history$d_norm_s, lty = 3)
+    graphics::lines(seq_along(history$d_norm_z), history$d_norm_z, lty = 4)
+    graphics::legend(
+      "topright",
+      legend = c("primal s", "primal z", "dual s", "dual z"),
+      lty = 1:4,
+      bty = "n"
+    )
+    return(invisible(x))
+  }
+
+  coords <- x$u[, 1:2, drop = FALSE]
+  values <- switch(
+    type,
+    deviation = x$delta[, index],
+    coefficient = x$beta_spatial[, index],
+    residual = x$residuals
+  )
+  main <- switch(
+    type,
+    deviation = paste0("Spatial deviation ", index),
+    coefficient = paste0("Local coefficient ", index),
+    residual = "Residuals"
+  )
+  pal <- grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(100L)
+  value_range <- range(values, finite = TRUE)
+  if (diff(value_range) == 0) {
+    col_id <- rep(50L, length(values))
+  } else {
+    col_id <- pmax(1L, pmin(100L, floor(1 + 99 * (values - value_range[1]) / diff(value_range))))
+  }
+  graphics::plot(
+    coords[, 1L], coords[, 2L],
+    col = pal[col_id],
+    pch = 19,
+    xlab = "Coordinate 1",
+    ylab = "Coordinate 2",
+    main = main,
+    ...
+  )
+  invisible(x)
+}
+
+summary.sssvcqr <- function(object, ...) {
+  delta_norm <- apply(object$delta, 2L, function(v) sqrt(sum(v^2)))
+  out <- list(
+    call = object$call,
+    n = object$n,
+    q = object$q,
+    p = object$p,
+    tau = object$tau,
+    lambda1 = object$lambda1,
+    lambda2 = object$lambda2,
+    iterations = object$iterations,
+    converged = object$converged,
+    alpha = object$alpha,
+    beta_G = object$beta_G,
+    delta_norm = delta_norm
+  )
+  class(out) <- "summary.sssvcqr"
+  out
+}
+
+print.sssvcqr <- function(x, ...) {
+  cat("Sparse-smooth SVC quantile regression fit\n")
+  cat("  n =", x$n, " q =", x$q, " p =", x$p, " tau =", x$tau, "\n")
+  cat("  lambda1 =", x$lambda1, " lambda2 =", x$lambda2, "\n")
+  cat("  iterations =", x$iterations, " converged =", x$converged, "\n")
+  invisible(x)
+}
+
+print.summary.sssvcqr <- function(x, ...) {
+  cat("Sparse-smooth SVC quantile regression summary\n")
+  cat("  n =", x$n, " q =", x$q, " p =", x$p, " tau =", x$tau, "\n")
+  cat("  lambda1 =", x$lambda1, " lambda2 =", x$lambda2, "\n")
+  cat("  iterations =", x$iterations, " converged =", x$converged, "\n\n")
+  if (length(x$alpha)) {
+    cat("alpha:\n")
+    print(x$alpha)
+  }
+  cat("beta_G:\n")
+  print(x$beta_G)
+  cat("delta L2 norms:\n")
+  print(x$delta_norm)
+  invisible(x)
+}
+
+cv_ss_svcqr <- function(y,
+                        Z,
+                        X,
+                        u,
+                        tau = 0.5,
+                        lambda1_seq,
+                        lambda2_seq,
+                        k_nn = 10L,
+                        K_folds = 5L,
+                        folds = NULL,
+                        adaptive_weights = TRUE,
+                        lambda1_pilot = NULL,
+                        lambda2_pilot = NULL,
+                        a_stabilizer = 0.01,
+                        gamma_power = 1,
+                        w = NULL,
+                        control = list(max_iter = 500L, tol_pri = 1e-4, tol_dual = 1e-3),
+                        fold_seed = 1L,
+                        verbose = FALSE,
+                        graph_normalized = TRUE,
+                        graph_symmetrize = c("union", "mutual"),
+                        graph_sigma = NULL) {
+  graph_symmetrize <- match.arg(graph_symmetrize)
+  y <- as.numeric(y)
+  n <- length(y)
+  Z <- if (missing(Z) || is.null(Z)) matrix(nrow = n, ncol = 0L) else .as_matrix(Z, n, "Z")
+  X <- .as_matrix(X, n, "X")
+  u <- .as_matrix(u, n, "u")
+  p <- ncol(X)
+
+  if (is.null(folds)) {
+    folds <- make_spatial_folds(u, K = K_folds, method = "kmeans", seed = fold_seed)
+  }
+  folds <- as.integer(folds)
+  if (length(folds) != n) {
+    stop("folds must have length equal to length(y).", call. = FALSE)
+  }
+  fold_ids <- sort(unique(folds))
+
+  if (adaptive_weights && is.null(w)) {
+    if (is.null(lambda1_pilot)) {
+      lambda1_pilot <- min(lambda1_seq)
+    }
+    if (is.null(lambda2_pilot)) {
+      lambda2_pilot <- max(lambda2_seq)
+    }
+    if (verbose) {
+      message("Running pilot fit for adaptive weights.")
+    }
+    fit_pilot <- ss_svcqr(
+      y = y, Z = Z, X = X, u = u, tau = tau,
+      lambda1 = lambda1_pilot, lambda2 = lambda2_pilot,
+      k_nn = k_nn, w = NULL, control = control,
+      graph_normalized = graph_normalized,
+      graph_symmetrize = graph_symmetrize,
+      graph_sigma = graph_sigma
+    )
+    delta_pilot_norms <- apply(fit_pilot$delta, 2L, function(v) sqrt(sum(v^2)))
+    w <- 1 / (delta_pilot_norms + a_stabilizer)^gamma_power
+  }
+  if (is.null(w)) {
+    w <- rep(1, p)
+  }
+
+  grid <- expand.grid(lambda1 = lambda1_seq, lambda2 = lambda2_seq)
+  cv_mean <- rep(NA_real_, nrow(grid))
+  cv_sd <- rep(NA_real_, nrow(grid))
+
+  for (g in seq_len(nrow(grid))) {
+    l1 <- grid$lambda1[g]
+    l2 <- grid$lambda2[g]
+    if (verbose) {
+      message("CV grid ", g, "/", nrow(grid), ": lambda1=", l1, ", lambda2=", l2)
+    }
+    fold_losses <- rep(NA_real_, length(fold_ids))
+
+    for (f in seq_along(fold_ids)) {
+      idx_val <- which(folds == fold_ids[f])
+      idx_tr <- which(folds != fold_ids[f])
+      if (length(idx_tr) <= ncol(Z) + ncol(X)) {
+        next
+      }
+
+      fit_cv <- ss_svcqr(
+        y = y[idx_tr],
+        Z = Z[idx_tr, , drop = FALSE],
+        X = X[idx_tr, , drop = FALSE],
+        u = u[idx_tr, , drop = FALSE],
+        tau = tau,
+        lambda1 = l1,
+        lambda2 = l2,
+        k_nn = k_nn,
+        w = w,
+        control = control,
+        graph_normalized = graph_normalized,
+        graph_symmetrize = graph_symmetrize,
+        graph_sigma = graph_sigma
+      )
+
+      qhat <- predict(
+        fit_cv,
+        Znew = Z[idx_val, , drop = FALSE],
+        Xnew = X[idx_val, , drop = FALSE],
+        unew = u[idx_val, , drop = FALSE]
+      )
+      fold_losses[f] <- mean(check_loss_vec(y[idx_val] - qhat, tau))
+    }
+
+    cv_mean[g] <- mean(fold_losses, na.rm = TRUE)
+    cv_sd[g] <- stats::sd(fold_losses, na.rm = TRUE)
+  }
+
+  best_idx <- which.min(cv_mean)
+  out <- list(
+    grid = grid,
+    cv_mean = cv_mean,
+    cv_sd = cv_sd,
+    best = list(
+      lambda1 = grid$lambda1[best_idx],
+      lambda2 = grid$lambda2[best_idx],
+      cv_mean = cv_mean[best_idx],
+      cv_sd = cv_sd[best_idx]
+    ),
+    folds = folds,
+    weights = w,
+    tau = tau
+  )
+  class(out) <- "sssvcqr_cv"
+  out
+}
+
+print.sssvcqr_cv <- function(x, ...) {
+  cat("Spatially blocked CV for SS-SVCQR\n")
+  cat("  tau =", x$tau, "\n")
+  cat("  best lambda1 =", x$best$lambda1, "\n")
+  cat("  best lambda2 =", x$best$lambda2, "\n")
+  cat("  best mean check loss =", x$best$cv_mean, "\n")
+  invisible(x)
+}
+
+kkt_sssvcqr <- function(y,
+                        Z,
+                        X,
+                        fit,
+                        L_sym = NULL,
+                        D_vec = NULL,
+                        components_list = NULL,
+                        lambda1 = fit$lambda1,
+                        lambda2 = fit$lambda2,
+                        w = fit$weights,
+                        tau = fit$tau) {
+  y <- as.numeric(y)
+  n <- length(y)
+  Z <- if (missing(Z) || is.null(Z)) matrix(nrow = n, ncol = 0L) else .as_matrix(Z, n, "Z")
+  X <- .as_matrix(X, n, "X")
+  if (is.null(L_sym) || is.null(D_vec) || is.null(components_list)) {
+    graph_data <- build_graph_laplacian(
+      fit$u,
+      k = fit$graph$k,
+      normalized = fit$graph$normalized,
+      symmetrize = fit$graph$symmetrize,
+      sigma = fit$graph$sigma
+    )
+    L_sym <- graph_data$L_sym
+    D_vec <- graph_data$D_vec
+    components_list <- graph_data$components_list
+  }
+
+  q <- ncol(Z)
+  p <- ncol(X)
+  Z_alpha <- if (q > 0L) as.numeric(Z %*% fit$alpha) else rep(0, n)
+  X_betaG <- as.numeric(X %*% fit$beta_G)
+  Xdelta <- rowSums(X * fit$delta)
+  r <- y - Z_alpha - X_betaG - Xdelta
+  psi <- tau - as.numeric(r < 0)
+
+  g_alpha <- if (q > 0L) crossprod(Z, psi) else 0
+  g_betaG <- crossprod(X, psi)
+  grad_alpha_norm <- if (q > 0L) sqrt(sum(g_alpha^2)) else 0
+  grad_betaG_norm <- sqrt(sum(g_betaG^2))
+
+  delta_norm <- apply(fit$delta, 2L, function(v) sqrt(sum(v^2)))
+  group_stationarity <- rep(NA_real_, p)
+  group_margin <- rep(NA_real_, p)
+
+  for (j in seq_len(p)) {
+    g_j <- X[, j] * psi + 2 * lambda2 * as.vector(L_sym %*% fit$delta[, j])
+    g_tilde_j <- project_D_centered(g_j, D_vec, components_list)
+
+    dj_norm <- delta_norm[j]
+    if (dj_norm > 1e-10) {
+      target <- lambda1 * w[j] * fit$delta[, j] / dj_norm
+      group_stationarity[j] <- sqrt(sum((g_tilde_j - target)^2))
+    } else {
+      gnorm <- sqrt(sum(g_tilde_j^2))
+      group_margin[j] <- max(0, gnorm - lambda1 * w[j])
+    }
+  }
+
+  list(
+    grad_alpha_norm = grad_alpha_norm,
+    grad_betaG_norm = grad_betaG_norm,
+    group_stationarity = group_stationarity,
+    group_margin = group_margin,
+    delta_norm = delta_norm,
+    max_violation = max(c(
+      grad_alpha_norm,
+      grad_betaG_norm,
+      ifelse(is.na(group_stationarity), 0, group_stationarity),
+      ifelse(is.na(group_margin), 0, group_margin)
+    ))
+  )
+}

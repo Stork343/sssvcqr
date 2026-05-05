@@ -1,0 +1,16 @@
+^README\.Rmd$
+^LICENSE$
+^CITATION\.cff$
+^cran-comments\.md$
+^\.zenodo\.json$
+^CONTRIBUTING\.md$
+^CODE_OF_CONDUCT\.md$
+^SUPPORT\.md$
+^\.github$
+^\.git$
+^\.gitignore$
+^data-raw$
+^joss$
+^reproducibility$
+^sssvcqr_[0-9].*\.tar\.gz$
+^.*\.Rcheck$

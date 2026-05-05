@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use sssvcqr, please cite it as below."
+title: "sssvcqr: Sparse-Smooth Spatially Varying Coefficient Quantile Regression"
+version: 0.0.1
+date-released: 2026-05-05
+authors:
+  - family-names: Hou
+    given-names: Houjian
+    email: beidaihe77@qq.com
+    affiliation: "Center for Applied Statistics, School of Statistics, Renmin University of China"
+license: GPL-3.0-or-later
+preferred-citation:
+  type: article
+  title: "sssvcqr: Sparse-Smooth Spatially Varying Coefficient Quantile Regression in R"
+  authors:
+    - family-names: Hou
+      given-names: Houjian
+      affiliation: "Center for Applied Statistics, School of Statistics, Renmin University of China"
+  year: 2026

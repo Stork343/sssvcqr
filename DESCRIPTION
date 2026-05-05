@@ -1,0 +1,29 @@
+Package: sssvcqr
+Title: Sparse-Smooth Spatially Varying Coefficient Quantile Regression
+Version: 0.0.1
+Authors@R: c(
+    person(given = "Houjian", family = "Hou", role = c("aut", "cre"),
+           email = "beidaihe77@qq.com")
+    )
+Author: Houjian Hou [aut, cre]
+Maintainer: Houjian Hou <beidaihe77@qq.com>
+Description: Implements sparse-smooth spatially varying coefficient quantile
+    regression (SS-SVCQR). The package provides graph-regularized ADMM
+    estimation, spatially blocked cross-validation, prediction, diagnostics,
+    and simulation helpers for global-local spatial quantile regression.
+License: GPL (>= 3)
+Encoding: UTF-8
+LazyData: true
+Depends:
+    R (>= 4.1)
+Imports:
+    FNN,
+    igraph,
+    Matrix,
+    methods,
+    stats
+Suggests:
+    knitr,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+Config/testthat/edition: 3
