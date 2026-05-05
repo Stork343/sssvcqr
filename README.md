@@ -81,10 +81,12 @@ cv$best
 - `simulate_sssvcqr_data()`: generate synthetic examples for testing and tutorials.
 - `kkt_sssvcqr()`: compute first-order diagnostic quantities for a fitted model.
 
-## Development Status
+## Release Status
 
-This is a research-software release prepared for journal submission. The
+This is a research-software release prepared for journal submission. The public
+repository is available at <https://github.com/Stork343/sssvcqr>, with release
+`v0.0.1` at <https://github.com/Stork343/sssvcqr/releases/tag/v0.0.1>. The
 repository includes a GitHub Actions R CMD check workflow, package vignettes,
 smoke-test reproducibility scripts, a JOSS paper draft, and a small Lucas
-County example data set. A tagged release and software DOI should be added
-after the public repository is available.
+County example data set. A software DOI should be added after the repository is
+enabled in Zenodo.
