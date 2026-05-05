@@ -17,6 +17,8 @@ Description: Implements sparse-smooth spatially varying coefficient quantile
     prediction, diagnostics, and simulation helpers for global-local spatial
     quantile regression.
 License: GPL (>= 3)
+URL: https://github.com/Stork343/sssvcqr
+BugReports: https://github.com/Stork343/sssvcqr/issues
 Encoding: UTF-8
 LazyData: true
 Depends:

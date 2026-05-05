@@ -3,6 +3,7 @@ bibentry(
   title = "sssvcqr: Sparse-Smooth Spatially Varying Coefficient Quantile Regression",
   author = c(person(given = "Houjian", family = "Hou")),
   year = "2026",
+  url = "https://github.com/Stork343/sssvcqr",
   note = "R package version 0.0.1",
   textVersion = paste(
     "Hou H (2026). sssvcqr: Sparse-Smooth Spatially Varying Coefficient",

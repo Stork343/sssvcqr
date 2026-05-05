@@ -23,6 +23,13 @@ Or from the `extend/` directory:
 R CMD INSTALL sssvcqr
 ```
 
+From GitHub:
+
+```r
+install.packages("remotes")
+remotes::install_github("Stork343/sssvcqr")
+```
+
 ## Quick Start
 
 ```r
@@ -76,11 +83,8 @@ cv$best
 
 ## Development Status
 
-This is a package scaffold suitable for continued development. Before journal
-submission, the project should add a public Git history, tagged releases, a DOI,
-CI checks, vignettes reproducing the paper examples, and author-verified license
-and citation metadata.
-
-The repository now includes a GitHub Actions R CMD check workflow, package
-vignettes, smoke-test reproducibility scripts, a JOSS paper draft, and a small
-Lucas County example data set.
+This is a research-software release prepared for journal submission. The
+repository includes a GitHub Actions R CMD check workflow, package vignettes,
+smoke-test reproducibility scripts, a JOSS paper draft, and a small Lucas
+County example data set. A tagged release and software DOI should be added
+after the public repository is available.

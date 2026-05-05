@@ -9,6 +9,7 @@ authors:
     email: beidaihe77@qq.com
     affiliation: "Center for Applied Statistics, School of Statistics, Renmin University of China"
 license: GPL-3.0-or-later
+repository-code: "https://github.com/Stork343/sssvcqr"
 preferred-citation:
   type: article
   title: "sssvcqr: Sparse-Smooth Spatially Varying Coefficient Quantile Regression in R"
