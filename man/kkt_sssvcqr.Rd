@@ -3,7 +3,8 @@
 \title{KKT diagnostics for an SS-SVCQR fit}
 \description{
 Computes first-order diagnostic quantities for fitted SS-SVCQR coefficients,
-including group stationarity residuals and zero-group margins.
+including group stationarity residuals, zero-group margins, and centering
+constraint residuals.
 }
 \usage{
 kkt_sssvcqr(y, Z, X, fit, L_sym = NULL, D_vec = NULL,
@@ -19,5 +20,6 @@ they are rebuilt from the fitted object's graph metadata.}
 }
 \value{
 A list with gradient norms, group stationarity residuals, group margins, group
-norms, and the maximum diagnostic violation.
+norms, degree-weighted centering violations, and the maximum diagnostic
+violation.
 }

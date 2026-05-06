@@ -3,8 +3,8 @@
 \title{Lucas County housing sample}
 \description{
 A small sample derived from the Lucas County housing data used in the empirical
-analysis. The data are intended for examples and tutorials, not for reproducing
-the full empirical results.
+analysis. The data are intended for examples, tutorials, and package-sample
+replication only, not for reproducing the full empirical results.
 }
 \format{
 A data frame with selected variables:

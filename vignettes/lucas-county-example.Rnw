@@ -10,17 +10,18 @@
 \maketitle
 
 This vignette illustrates the package interface on a small sample of the Lucas
-County housing data. The full empirical analysis for the paper should be run
-from the reproducibility scripts, not from this lightweight example.
+County housing data. The full empirical analysis requires external data and a
+separate preprocessing workflow; the current standalone replication script uses
+only this package sample.
 
 <<setup, include=FALSE>>=
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 @
 
 <<lucas-fit>>=
-library(sssvcqr)
+library("sssvcqr")
 
-data(lucas_housing_sample)
+data("lucas_housing_sample")
 housing <- lucas_housing_sample
 
 y <- housing$log_price

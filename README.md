@@ -35,7 +35,8 @@ remotes::install_github("Stork343/sssvcqr")
 ```r
 library(sssvcqr)
 
-dat <- simulate_sssvcqr_data(n = 80, q = 1, p = 2, seed = 1)
+dat <- simulate_sssvcqr_data(n = 120, q = 2, p = 3, seed = 1)
+dat$active
 
 fit <- ss_svcqr(
   y = dat$y,
@@ -43,14 +44,15 @@ fit <- ss_svcqr(
   X = dat$X,
   u = dat$u,
   tau = 0.5,
-  lambda1 = 2,
-  lambda2 = 1,
-  k_nn = 6,
-  control = list(max_iter = 100, warn_nonconvergence = FALSE)
+  lambda1 = 5,
+  lambda2 = 0.1,
+  k_nn = 8,
+  control = list(max_iter = 180, warn_nonconvergence = FALSE)
 )
 
 fit
 summary(fit)
+selection_recovery_table(fit, dat)
 head(predict(fit))
 ```
 
@@ -79,6 +81,7 @@ cv$best
 - `cv_ss_svcqr()`: tune penalties by spatially blocked cross-validation.
 - `build_graph_laplacian()`: construct a weighted k-nearest-neighbor graph and Laplacian.
 - `simulate_sssvcqr_data()`: generate synthetic examples for testing and tutorials.
+- `selection_recovery_table()`: compare true and estimated deviation-field selection in synthetic examples.
 - `kkt_sssvcqr()`: compute first-order diagnostic quantities for a fitted model.
 
 ## Prior Art and Scope
@@ -102,17 +105,19 @@ quantile loss.
 ## Lifecycle
 
 This package is in an initially stable research-software state. The exported
-API is small, documented, and covered by smoke tests, but future releases may
-add a formula interface, compiled linear algebra kernels, uncertainty
-summaries, and grid-prediction helpers in response to reviewer and user
-feedback.
+API is small, documented, and covered by unit and numerical tests, but future
+releases may add a formula interface, compiled linear algebra kernels,
+uncertainty summaries, and grid-prediction helpers in response to reviewer and
+user feedback.
 
 ## Release Status
 
-This is a research-software release prepared for journal submission. The public
-repository is available at <https://github.com/Stork343/sssvcqr>. Release
-`v0.0.2` is the package version used by the JSS submission materials. The
-repository includes a GitHub Actions R CMD check workflow, package vignettes,
-smoke-test reproducibility scripts, a JOSS paper draft, and a small Lucas County
-example data set. A software DOI can be added after the GitHub release is
-archived with Zenodo.
+This is a research-software package prepared for journal submission. The public
+repository is available at <https://github.com/Stork343/sssvcqr>. The current
+local submission candidate declares package version `0.0.3`. The previous
+public archive is release `v0.0.2` with Zenodo DOI
+<https://doi.org/10.5281/zenodo.20048828>; that archive does not include the
+latest local submission-candidate changes. A new GitHub release and Zenodo DOI
+should be created after final review. The repository includes a GitHub Actions
+R CMD check workflow, package vignettes, root-level replication materials, a
+JOSS paper draft, and a small Lucas County example data set.

@@ -34,10 +34,11 @@ An object of class \code{sssvcqr} containing global coefficients, spatial
 deviations, fitted values, residuals, convergence history, and graph metadata.
 }
 \examples{
-dat <- simulate_sssvcqr_data(n = 40, q = 1, p = 2, seed = 1)
+dat <- simulate_sssvcqr_data(n = 40, q = 1, p = 3, seed = 1)
 fit <- ss_svcqr(dat$y, dat$Z, dat$X, dat$u,
-  lambda1 = 2, lambda2 = 1, k_nn = 5,
+  lambda1 = 5, lambda2 = 0.1, k_nn = 5,
   control = list(max_iter = 20, warn_nonconvergence = FALSE))
 fit
+selection_recovery_table(fit, dat)
 head(predict(fit))
 }

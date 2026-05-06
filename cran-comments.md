@@ -1,33 +1,33 @@
 ## Initial submission
 
-This is an initial CRAN submission.
+This is a draft CRAN submission note for the current local submission
+candidate. It should be reviewed again after the final source tarball is built.
 
 ## R CMD check results
 
-Local checks were run on macOS Sequoia 15.5, Apple silicon, with
-R 4.5.2.
+Local checks were run on macOS Sequoia 15.5, Apple silicon, with R 4.5.2.
+The current local candidate declares version 0.0.3.
 
-The source package passes:
-
-```r
-R CMD check --no-manual sssvcqr_0.0.2.tar.gz
-```
-
-with status: OK.
-
-The source package also passes:
+The source package was built with:
 
 ```r
-R CMD check --as-cran sssvcqr_0.0.2.tar.gz
+R CMD build sssvcqr
 ```
 
-except for local environment notes caused by first submission status and local
-validation limitations on the maintainer machine:
+The source package was checked with:
+
+```r
+R CMD check --no-manual --as-cran sssvcqr_0.0.3.tar.gz
+```
+
+The check completed with 0 errors, 0 warnings, and 2 notes:
 
 - New submission.
-- README.md or NEWS.md cannot be checked without pandoc.
-- HTML validation is skipped because the installed HTML Tidy is not recent
-  enough.
+- Unable to verify current time.
+
+The check log is in `../sssvcqr.Rcheck/00check.log` in the local working tree.
+
+No CRAN submission has been made from this local candidate yet.
 
 ## Package name
 

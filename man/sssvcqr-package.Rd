@@ -11,6 +11,6 @@ smooths local deviations with a graph Laplacian.
 }
 \seealso{
 \code{\link{ss_svcqr}}, \code{\link{cv_ss_svcqr}},
-\code{\link{simulate_sssvcqr_data}}
+\code{\link{simulate_sssvcqr_data}}, \code{\link{selection_recovery_table}}
 }
 \keyword{package}

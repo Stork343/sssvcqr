@@ -1,6 +1,6 @@
 Package: sssvcqr
 Title: Sparse-Smooth Spatially Varying Coefficient Quantile Regression
-Version: 0.0.2
+Version: 0.0.3
 Authors@R: c(
     person(given = "Houjian", family = "Hou", role = c("aut", "cre"),
            email = "beidaihe77@qq.com")
@@ -34,3 +34,4 @@ Suggests:
     testthat (>= 3.0.0)
 VignetteBuilder: knitr
 Config/testthat/edition: 3
+RoxygenNote: 7.3.3

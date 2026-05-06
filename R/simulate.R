@@ -30,22 +30,32 @@ simulate_sssvcqr_data <- function(n = 120,
   colnames(Z) <- if (q > 0L) paste0("z", seq_len(q)) else character()
   colnames(X) <- paste0("x", seq_len(p))
 
-  alpha <- if (q == 0L) numeric() else seq(1.0, length.out = q, by = -0.4)
-  beta_G <- seq(1.5, length.out = p, by = -0.5)
+  alpha_true <- if (q == 0L) numeric() else seq(1.0, length.out = q, by = -0.4)
+  beta_G_true <- seq(1.5, length.out = p, by = -0.5)
 
-  delta <- matrix(0, nrow = n, ncol = p)
-  delta[, 1L] <- 0.9 * sin(2 * pi * u[, 1L]) * cos(2 * pi * u[, 2L])
+  active <- rep(FALSE, p)
+  active[1L] <- TRUE
   if (p >= 3L) {
-    delta[, 3L] <- 0.7 * exp(-18 * ((u[, 1L] - 0.65)^2 + (u[, 2L] - 0.35)^2))
+    active[3L] <- TRUE
+  }
+  names(active) <- colnames(X)
+
+  delta_true <- matrix(0, nrow = n, ncol = p)
+  colnames(delta_true) <- colnames(X)
+  delta_true[, 1L] <- 2.0 * sin(2 * pi * u[, 1L]) * cos(2 * pi * u[, 2L])
+  if (p >= 3L) {
+    delta_true[, 3L] <- 8.0 * exp(-18 * ((u[, 1L] - 0.65)^2 + (u[, 2L] - 0.35)^2))
   }
 
   graph <- build_graph_laplacian(u, k = min(graph_k, n - 1L))
   for (j in seq_len(p)) {
-    delta[, j] <- project_D_centered(delta[, j], graph$D_vec, graph$components_list)
+    delta_true[, j] <- project_D_centered(delta_true[, j], graph$D_vec, graph$components_list)
   }
+  beta_spatial_true <- matrix(beta_G_true, nrow = n, ncol = p, byrow = TRUE) + delta_true
+  colnames(beta_spatial_true) <- colnames(X)
 
-  eta <- as.numeric(if (q > 0L) Z %*% alpha else rep(0, n)) +
-    as.numeric(X %*% beta_G) + rowSums(X * delta)
+  eta <- as.numeric(if (q > 0L) Z %*% alpha_true else rep(0, n)) +
+    as.numeric(X %*% beta_G_true) + rowSums(X * delta_true)
   errors <- stats::rnorm(n, sd = noise_sd) - stats::qnorm(tau) * noise_sd
   y <- eta + errors
 
@@ -55,9 +65,15 @@ simulate_sssvcqr_data <- function(n = 120,
     X = X,
     u = u,
     eta = eta,
-    alpha = alpha,
-    beta_G = beta_G,
-    delta = delta,
-    tau = tau
+    alpha_true = alpha_true,
+    beta_G_true = beta_G_true,
+    delta_true = delta_true,
+    beta_spatial_true = beta_spatial_true,
+    active = active,
+    tau = tau,
+    seed = seed,
+    alpha = alpha_true,
+    beta_G = beta_G_true,
+    delta = delta_true
   )
 }

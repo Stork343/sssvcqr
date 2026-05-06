@@ -69,46 +69,121 @@ build_graph_laplacian <- function(u,
   if (n < 2L) {
     stop("u must contain at least two locations.", call. = FALSE)
   }
-  k <- max(1L, min(as.integer(k), n - 1L))
+  if (ncol(u) < 1L) {
+    stop("u must contain at least one coordinate column.", call. = FALSE)
+  }
+  if (!is.logical(normalized) || length(normalized) != 1L || is.na(normalized)) {
+    stop("normalized must be a single TRUE or FALSE value.", call. = FALSE)
+  }
+  if (!is.numeric(k) || length(k) != 1L || !is.finite(k) || is.na(k) || k < 1) {
+    stop("k must be a positive finite scalar.", call. = FALSE)
+  }
+  k <- as.integer(min(floor(k), n - 1L))
+  if (!is.null(sigma) &&
+      (!is.numeric(sigma) || length(sigma) != 1L || !is.finite(sigma) || sigma <= 0)) {
+    stop("sigma must be a positive finite scalar when supplied.", call. = FALSE)
+  }
 
-  dmat <- as.matrix(stats::dist(u))
-  positive_d2 <- dmat[dmat > 0]^2
-  sigma2 <- if (is.null(sigma)) stats::median(positive_d2) else sigma^2
+  edge_n <- as.double(n) * k
+  if (edge_n > .Machine$integer.max) {
+    stop("n * k is too large to construct the requested graph.", call. = FALSE)
+  }
+  edge_n <- as.integer(edge_n)
+  search_k <- min(n, k + 1L)
+  nn <- FNN::get.knnx(data = u, query = u, k = search_k)
+  directed_i <- integer(edge_n)
+  directed_j <- integer(edge_n)
+  directed_dist <- numeric(edge_n)
+  pos <- 0L
+
+  for (i in seq_len(n)) {
+    keep <- nn$nn.index[i, ] != i
+    idx_i <- nn$nn.index[i, keep]
+    dist_i <- nn$nn.dist[i, keep]
+
+    if (length(idx_i) < k) {
+      nn_i <- FNN::get.knnx(data = u, query = u[i, , drop = FALSE], k = n)
+      keep <- nn_i$nn.index[1L, ] != i
+      idx_i <- nn_i$nn.index[1L, keep]
+      dist_i <- nn_i$nn.dist[1L, keep]
+    }
+    if (length(idx_i) < k) {
+      stop("Could not identify k nearest neighbors for every location.", call. = FALSE)
+    }
+
+    edge_idx <- pos + seq_len(k)
+    directed_i[edge_idx] <- i
+    directed_j[edge_idx] <- idx_i[seq_len(k)]
+    directed_dist[edge_idx] <- dist_i[seq_len(k)]
+    pos <- pos + k
+  }
+
+  positive_d2 <- directed_dist[directed_dist > 0]^2
+  sigma2 <- if (is.null(sigma)) {
+    if (length(positive_d2)) stats::median(positive_d2) else 1
+  } else {
+    sigma^2
+  }
   if (!is.finite(sigma2) || sigma2 <= 0) {
     sigma2 <- 1
   }
+  directed_weight <- exp(-directed_dist^2 / sigma2)
 
-  W_directed <- matrix(0, nrow = n, ncol = n)
-  for (i in seq_len(n)) {
-    nn_id <- order(dmat[i, ], decreasing = FALSE)[seq.int(2L, k + 1L)]
-    W_directed[i, nn_id] <- exp(-dmat[i, nn_id]^2 / sigma2)
-  }
+  pair_i <- pmin(directed_i, directed_j)
+  pair_j <- pmax(directed_i, directed_j)
+  pair_key <- as.double(pair_i) + (as.double(pair_j) - 1) * n
+  pair_order <- order(pair_key)
+  pair_key <- pair_key[pair_order]
+  pair_i <- pair_i[pair_order]
+  pair_j <- pair_j[pair_order]
+  directed_weight <- directed_weight[pair_order]
 
-  W <- if (symmetrize == "union") {
-    pmax(W_directed, t(W_directed))
+  group_start <- c(1L, which(diff(pair_key) != 0) + 1L)
+  group_count <- diff(c(group_start, length(pair_key) + 1L))
+  keep_group <- if (symmetrize == "union") {
+    rep(TRUE, length(group_start))
   } else {
-    pmin(W_directed, t(W_directed))
+    group_count > 1L
   }
-  diag(W) <- 0
+  group_start <- group_start[keep_group]
+  if (length(group_start)) {
+    edge_i <- pair_i[group_start]
+    edge_j <- pair_j[group_start]
+    edge_weight <- directed_weight[group_start]
+    W <- Matrix::sparseMatrix(
+      i = c(edge_i, edge_j),
+      j = c(edge_j, edge_i),
+      x = c(edge_weight, edge_weight),
+      dims = c(n, n)
+    )
+  } else {
+    W <- Matrix::sparseMatrix(
+      i = integer(0),
+      j = integer(0),
+      x = numeric(0),
+      dims = c(n, n)
+    )
+  }
+  W <- Matrix::drop0(Matrix::forceSymmetric(W, uplo = "U"))
+  W <- methods::as(W, "dsCMatrix")
 
-  D_vec <- rowSums(W)
+  D_vec <- as.numeric(Matrix::rowSums(W))
   if (normalized) {
     inv_sqrt_d <- ifelse(D_vec > 0, 1 / sqrt(D_vec), 0)
-    L <- diag(n) - (W * inv_sqrt_d) * rep(inv_sqrt_d, each = n)
+    S <- .sparse_diagonal(n, inv_sqrt_d)
+    L_sp <- .sparse_diagonal(n, 1) - S %*% W %*% S
   } else {
-    L <- diag(D_vec) - W
+    L_sp <- .sparse_diagonal(n, D_vec) - W
   }
 
-  L_sp <- Matrix::Matrix(L, sparse = TRUE)
+  L_sp <- Matrix::drop0(L_sp)
   L_sp <- Matrix::forceSymmetric(L_sp)
   L_sp <- methods::as(L_sp, "dsCMatrix")
 
-  graph <- igraph::graph_from_adjacency_matrix(
-    W,
-    mode = "undirected",
-    weighted = TRUE,
-    diag = FALSE
-  )
+  graph <- igraph::make_empty_graph(n = n, directed = FALSE)
+  if (length(group_start)) {
+    graph <- igraph::add_edges(graph, as.vector(rbind(edge_i, edge_j)))
+  }
   comp <- igraph::components(graph)$membership
   components_list <- split(seq_len(n), comp)
 
@@ -137,6 +212,77 @@ project_D_centered <- function(v, D_vec, components_list) {
     }
   }
   v_proj
+}
+
+.make_constraint_matrix <- function(D_vec, components_list) {
+  n <- length(D_vec)
+  m <- length(components_list)
+  if (m == 0L) {
+    return(Matrix::sparseMatrix(
+      i = integer(0),
+      j = integer(0),
+      x = numeric(0),
+      dims = c(n, 0L)
+    ))
+  }
+
+  nnz <- sum(lengths(components_list))
+  row_idx <- integer(nnz)
+  col_idx <- integer(nnz)
+  values <- numeric(nnz)
+  pos <- 0L
+
+  for (col in seq_along(components_list)) {
+    comp_idx <- components_list[[col]]
+    weights <- D_vec[comp_idx]
+    if (sum(weights) <= 0) {
+      weights <- rep(1, length(comp_idx))
+    }
+
+    idx <- pos + seq_along(comp_idx)
+    row_idx[idx] <- comp_idx
+    col_idx[idx] <- col
+    values[idx] <- weights
+    pos <- pos + length(comp_idx)
+  }
+
+  Matrix::sparseMatrix(
+    i = row_idx,
+    j = col_idx,
+    x = values,
+    dims = c(n, m)
+  )
+}
+
+.solve_centered_system <- function(A, b, C, ridge) {
+  n <- length(b)
+  m <- ncol(C)
+  if (m == 0L) {
+    return(as.numeric(Matrix::solve(A, b)))
+  }
+
+  zero_block <- Matrix::sparseMatrix(
+    i = integer(0),
+    j = integer(0),
+    x = numeric(0),
+    dims = c(m, m)
+  )
+  kkt <- rbind(cbind(A, C), cbind(Matrix::t(C), zero_block))
+  kkt <- methods::as(kkt, "dgCMatrix")
+  rhs <- c(b, rep(0, m))
+
+  # The KKT matrix is symmetric indefinite, so sparse Cholesky is not
+  # appropriate here. Matrix::solve() on a dgCMatrix uses a sparse general
+  # solver and keeps the centering constraints inside the linear system.
+  sol <- tryCatch(
+    Matrix::solve(kkt, rhs),
+    error = function(e) {
+      A_ridge <- A + ridge * .sparse_diagonal(n, 1)
+      kkt_ridge <- rbind(cbind(A_ridge, C), cbind(Matrix::t(C), zero_block))
+      Matrix::solve(methods::as(kkt_ridge, "dgCMatrix"), rhs)
+    }
+  )
+  as.numeric(sol[seq_len(n)])
 }
 
 prox_check <- function(v, gamma, tau) {
@@ -245,6 +391,7 @@ ss_svcqr <- function(y,
   L_sym <- graph_data$L_sym
   D_vec <- graph_data$D_vec
   components_list <- graph_data$components_list
+  C_center <- .make_constraint_matrix(D_vec, components_list)
 
   alpha <- rep(0, q)
   beta_G <- rep(0, p)
@@ -261,15 +408,12 @@ ss_svcqr <- function(y,
     error = function(e) chol(GtG + diag(ctrl$ridge, nrow = q + p))
   )
 
-  Aj_chol_list <- vector("list", p)
+  Aj_list <- vector("list", p)
   for (j in seq_len(p)) {
     A_j <- 2 * lambda2 * L_sym +
       ctrl$rho_s * .sparse_diagonal(n, X[, j]^2) +
       ctrl$rho_z * .sparse_diagonal(n, 1)
-    Aj_chol_list[[j]] <- tryCatch(
-      Matrix::Cholesky(A_j, LDL = FALSE),
-      error = function(e) Matrix::Cholesky(A_j + ctrl$ridge * .sparse_diagonal(n, 1), LDL = FALSE)
-    )
+    Aj_list[[j]] <- Matrix::drop0(methods::as(A_j, "dsCMatrix"))
   }
 
   history <- list(
@@ -308,8 +452,7 @@ ss_svcqr <- function(y,
       resid_j <- y - Z_alpha - X_beta_G - X_delta_minus_j - s + u_dual
       b_j <- ctrl$rho_s * (X[, j] * resid_j) + ctrl$rho_z * (z[, j] - v_dual[, j])
 
-      delta[, j] <- as.numeric(Matrix::solve(Aj_chol_list[[j]], b_j))
-      delta[, j] <- project_D_centered(delta[, j], D_vec, components_list)
+      delta[, j] <- .solve_centered_system(Aj_list[[j]], b_j, C_center, ctrl$ridge)
       X_delta_all <- X_delta_minus_j + X[, j] * delta[, j]
 
       z[, j] <- group_shrink(delta[, j] + v_dual[, j], lambda1 * w[j] / ctrl$rho_z)
@@ -473,6 +616,60 @@ coef.sssvcqr <- function(object, ...) {
   list(alpha = object$alpha, beta_G = object$beta_G, delta = object$delta)
 }
 
+.add_value_colorbar <- function(pal, value_range, label) {
+  usr <- graphics::par("usr")
+  x_span <- diff(usr[1:2])
+  y_span <- diff(usr[3:4])
+  xleft <- usr[2] + 0.05 * x_span
+  xright <- usr[2] + 0.08 * x_span
+  ybottom <- usr[3] + 0.12 * y_span
+  ytop <- usr[4] - 0.12 * y_span
+  y_breaks <- seq(ybottom, ytop, length.out = length(pal) + 1L)
+
+  old_xpd <- graphics::par("xpd")
+  graphics::par(xpd = NA)
+  on.exit(graphics::par(xpd = old_xpd), add = TRUE)
+
+  graphics::rect(
+    xleft = xleft,
+    ybottom = y_breaks[-length(y_breaks)],
+    xright = xright,
+    ytop = y_breaks[-1L],
+    col = pal,
+    border = NA
+  )
+  graphics::rect(xleft, ybottom, xright, ytop, border = "grey30")
+
+  if (diff(value_range) == 0) {
+    tick_values <- value_range[1L]
+    tick_y <- (ybottom + ytop) / 2
+  } else {
+    tick_values <- pretty(value_range, n = 4L)
+    tick_values <- tick_values[tick_values >= value_range[1L] & tick_values <= value_range[2L]]
+    if (!length(tick_values)) {
+      tick_values <- value_range
+    }
+    tick_y <- ybottom + (tick_values - value_range[1L]) / diff(value_range) * (ytop - ybottom)
+  }
+
+  graphics::segments(
+    x0 = xright,
+    y0 = tick_y,
+    x1 = xright + 0.012 * x_span,
+    y1 = tick_y,
+    col = "grey30"
+  )
+  graphics::text(
+    x = xright + 0.018 * x_span,
+    y = tick_y,
+    labels = format(signif(tick_values, 4), trim = TRUE),
+    adj = c(0, 0.5),
+    cex = 0.75
+  )
+  graphics::mtext(label, side = 4L, line = 3.1, cex = 0.8)
+  invisible(NULL)
+}
+
 plot.sssvcqr <- function(x,
                          type = c("deviation", "coefficient", "residual", "convergence"),
                          index = 1L,
@@ -519,13 +716,28 @@ plot.sssvcqr <- function(x,
     coefficient = paste0("Local coefficient ", index),
     residual = "Residuals"
   )
+  colorbar_label <- switch(
+    type,
+    deviation = "Deviation",
+    coefficient = "Coefficient",
+    residual = "Residual"
+  )
   pal <- grDevices::colorRampPalette(c("#2166AC", "#F7F7F7", "#B2182B"))(100L)
   value_range <- range(values, finite = TRUE)
+  if (!all(is.finite(value_range))) {
+    stop("plot values must contain at least one finite value.", call. = FALSE)
+  }
   if (diff(value_range) == 0) {
     col_id <- rep(50L, length(values))
   } else {
     col_id <- pmax(1L, pmin(100L, floor(1 + 99 * (values - value_range[1]) / diff(value_range))))
   }
+  old_mar <- graphics::par("mar")
+  old_xpd <- graphics::par("xpd")
+  on.exit(graphics::par(mar = old_mar, xpd = old_xpd), add = TRUE)
+  new_mar <- old_mar
+  new_mar[4L] <- max(new_mar[4L], 5.1)
+  graphics::par(mar = new_mar)
   graphics::plot(
     coords[, 1L], coords[, 2L],
     col = pal[col_id],
@@ -535,6 +747,7 @@ plot.sssvcqr <- function(x,
     main = main,
     ...
   )
+  .add_value_colorbar(pal, value_range, colorbar_label)
   invisible(x)
 }
 
@@ -833,6 +1046,9 @@ kkt_sssvcqr <- function(y,
   delta_norm <- apply(fit$delta, 2L, function(v) sqrt(sum(v^2)))
   group_stationarity <- rep(NA_real_, p)
   group_margin <- rep(NA_real_, p)
+  C_center <- .make_constraint_matrix(D_vec, components_list)
+  centering_residual <- as.matrix(Matrix::t(C_center) %*% fit$delta)
+  centering_violation <- apply(abs(centering_residual), 2L, max)
 
   for (j in seq_len(p)) {
     g_j <- X[, j] * psi + 2 * lambda2 * as.vector(L_sym %*% fit$delta[, j])
@@ -853,12 +1069,15 @@ kkt_sssvcqr <- function(y,
     grad_betaG_norm = grad_betaG_norm,
     group_stationarity = group_stationarity,
     group_margin = group_margin,
+    centering_violation = centering_violation,
+    max_centering_violation = max(centering_violation),
     delta_norm = delta_norm,
     max_violation = max(c(
       grad_alpha_norm,
       grad_betaG_norm,
       ifelse(is.na(group_stationarity), 0, group_stationarity),
-      ifelse(is.na(group_margin), 0, group_margin)
+      ifelse(is.na(group_margin), 0, group_margin),
+      centering_violation
     ))
   )
 }

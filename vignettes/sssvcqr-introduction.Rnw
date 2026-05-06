@@ -17,9 +17,10 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 @
 
 <<fit-example>>=
-library(sssvcqr)
+library("sssvcqr")
 
-dat <- simulate_sssvcqr_data(n = 70, q = 1, p = 2, seed = 1)
+dat <- simulate_sssvcqr_data(n = 90, q = 1, p = 3, seed = 1)
+dat$active
 
 fit <- ss_svcqr(
   y = dat$y,
@@ -27,16 +28,27 @@ fit <- ss_svcqr(
   X = dat$X,
   u = dat$u,
   tau = 0.5,
-  lambda1 = 2,
-  lambda2 = 1,
-  k_nn = 6,
-  control = list(max_iter = 40, warn_nonconvergence = FALSE)
+  lambda1 = 5,
+  lambda2 = 0.1,
+  k_nn = 8,
+  control = list(max_iter = 80, warn_nonconvergence = FALSE)
 )
 
 fit
 summary(fit)
+selection_recovery_table(fit, dat)
 head(predict(fit))
 head(predict(fit, type = "coefficients"))
+@
+
+The spatial plot types use the first two columns of the coordinate matrix saved
+in the fitted object. Their colorbars show the numeric scale for deviations,
+local total coefficients, or residuals.
+
+<<plot-example, fig.width=7, fig.height=6>>=
+plot(fit, type = "deviation", index = 1)
+plot(fit, type = "coefficient", index = 1)
+plot(fit, type = "residual")
 @
 
 Penalty parameters can be selected by spatially blocked cross-validation. The
