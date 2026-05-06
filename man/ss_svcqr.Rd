@@ -23,7 +23,8 @@ ss_svcqr(y, Z, X, u, tau = 0.5, lambda1, lambda2, k_nn = 10L,
 \item{w}{Optional non-negative adaptive group weights.}
 \item{control}{List of ADMM controls: \code{max_iter}, \code{tol_pri},
 \code{tol_dual}, \code{rho_s}, \code{rho_z}, \code{ridge}, and
-\code{warn_nonconvergence}.}
+\code{warn_nonconvergence}. Set \code{verbose = TRUE} to print residual
+summaries during fitting.}
 \item{graph_normalized}{Use the normalized graph Laplacian if \code{TRUE}.}
 \item{graph_symmetrize}{How to symmetrize the directed k-nearest-neighbor graph.}
 \item{graph_sigma}{Optional Gaussian kernel bandwidth.}

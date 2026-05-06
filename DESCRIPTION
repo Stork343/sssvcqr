@@ -1,6 +1,6 @@
 Package: sssvcqr
 Title: Sparse-Smooth Spatially Varying Coefficient Quantile Regression
-Version: 0.0.1
+Version: 0.0.2
 Authors@R: c(
     person(given = "Houjian", family = "Hou", role = c("aut", "cre"),
            email = "beidaihe77@qq.com")

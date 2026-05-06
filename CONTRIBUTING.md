@@ -35,3 +35,11 @@ The package focuses on sparse-smooth spatially varying coefficient quantile
 regression and closely related diagnostics, tuning, simulation, and examples.
 Large reproduction scripts for the associated paper should stay under
 `reproducibility/`, not inside the core package API.
+
+## Lifecycle
+
+The package is in an initially stable research-software state. Changes should
+preserve the documented matrix interface, S3 return object, and existing
+replication scripts unless a release note explains the migration path. Planned
+extensions include a formula interface, faster sparse linear algebra for larger
+data sets, uncertainty summaries, and richer spatial prediction helpers.

@@ -20,7 +20,9 @@ cv_ss_svcqr(y, Z, X, u, tau = 0.5, lambda1_seq, lambda2_seq,
 \item{k_nn}{Number of nearest neighbors for graph construction.}
 \item{K_folds}{Number of spatial folds when \code{folds} is not supplied.}
 \item{folds}{Optional integer fold labels.}
-\item{adaptive_weights}{Whether to estimate adaptive group weights by a pilot fit.}
+\item{adaptive_weights}{Whether to estimate adaptive group weights by pilot
+fits. When \code{TRUE} and \code{w} is not supplied, pilot weights are
+estimated within each training fold to avoid validation leakage.}
 \item{lambda1_pilot, lambda2_pilot}{Optional pilot penalties.}
 \item{a_stabilizer, gamma_power}{Adaptive weight parameters.}
 \item{w}{Optional precomputed group weights.}

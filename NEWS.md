@@ -1,3 +1,10 @@
+# sssvcqr 0.0.2
+
+- Strengthened input validation, fold-wise adaptive-weight estimation in
+  blocked cross-validation, and inverse-distance extrapolation for
+  `predict(..., k > 1)`.
+- Added a reproducible comparison section for the JSS replication material.
+
 # sssvcqr 0.0.1
 
 - Initial package scaffold for sparse-smooth spatially varying coefficient

@@ -4,7 +4,17 @@
     stop(name, " must have ", n, " rows.", call. = FALSE)
   }
   storage.mode(x) <- "double"
+  if (anyNA(x) || any(!is.finite(x))) {
+    stop(name, " must contain only finite numeric values.", call. = FALSE)
+  }
   x
+}
+
+.check_nonnegative_scalar <- function(x, name) {
+  if (!is.numeric(x) || length(x) != 1L || !is.finite(x) || x < 0) {
+    stop(name, " must be a non-negative finite scalar.", call. = FALSE)
+  }
+  invisible(x)
 }
 
 .sparse_diagonal <- function(n, x = 1.0) {
@@ -160,11 +170,22 @@ ss_svcqr <- function(y,
   if (n < 2L) {
     stop("y must contain at least two observations.", call. = FALSE)
   }
+  if (anyNA(y) || any(!is.finite(y))) {
+    stop("y must contain only finite numeric values.", call. = FALSE)
+  }
   if (!is.numeric(tau) || length(tau) != 1L || tau <= 0 || tau >= 1) {
     stop("tau must be a scalar in (0, 1).", call. = FALSE)
   }
-  if (missing(lambda1) || missing(lambda2) || lambda1 < 0 || lambda2 < 0) {
-    stop("lambda1 and lambda2 must be non-negative scalars.", call. = FALSE)
+  if (missing(lambda1) || missing(lambda2)) {
+    stop("lambda1 and lambda2 are required.", call. = FALSE)
+  }
+  .check_nonnegative_scalar(lambda1, "lambda1")
+  .check_nonnegative_scalar(lambda2, "lambda2")
+  if (!is.null(graph_sigma)) {
+    .check_nonnegative_scalar(graph_sigma, "graph_sigma")
+    if (graph_sigma == 0) {
+      stop("graph_sigma must be positive when supplied.", call. = FALSE)
+    }
   }
 
   Z <- if (missing(Z) || is.null(Z)) matrix(nrow = n, ncol = 0L) else .as_matrix(Z, n, "Z")
@@ -194,10 +215,25 @@ ss_svcqr <- function(y,
     rho_s = 1,
     rho_z = 1,
     ridge = 1e-6,
+    verbose = FALSE,
     warn_nonconvergence = TRUE
   )
+  unknown_control <- setdiff(names(control), names(ctrl))
+  if (length(unknown_control)) {
+    stop("Unknown control entries: ", paste(unknown_control, collapse = ", "), ".", call. = FALSE)
+  }
   ctrl[names(control)] <- control
   ctrl$max_iter <- as.integer(ctrl$max_iter)
+  if (is.na(ctrl$max_iter) || ctrl$max_iter < 1L) {
+    stop("control$max_iter must be a positive integer.", call. = FALSE)
+  }
+  for (nm in c("tol_pri", "tol_dual", "rho_s", "rho_z", "ridge")) {
+    .check_nonnegative_scalar(ctrl[[nm]], paste0("control$", nm))
+  }
+  if (ctrl$tol_pri == 0 || ctrl$tol_dual == 0 || ctrl$rho_s == 0 ||
+      ctrl$rho_z == 0 || ctrl$ridge == 0) {
+    stop("control tolerances, ADMM penalties, and ridge must be positive.", call. = FALSE)
+  }
 
   graph_data <- build_graph_laplacian(
     u,
@@ -290,6 +326,16 @@ ss_svcqr <- function(y,
     history$r_norm_z[iter] <- sqrt(sum(r_z_mat^2))
     history$d_norm_s[iter] <- ctrl$rho_s * sqrt(sum((s - s_prev)^2))
     history$d_norm_z[iter] <- sqrt(sum((ctrl$rho_z * (z - z_prev))^2))
+
+    if (isTRUE(ctrl$verbose) && (iter == 1L || iter %% 25L == 0L)) {
+      message(
+        "ADMM iter ", iter,
+        ": r_s=", signif(history$r_norm_s[iter], 4),
+        ", r_z=", signif(history$r_norm_z[iter], 4),
+        ", d_s=", signif(history$d_norm_s[iter], 4),
+        ", d_z=", signif(history$d_norm_z[iter], 4)
+      )
+    }
 
     norm_Ax_s <- sqrt(sum((y - Z_alpha - X_beta_G - X_delta_all)^2))
     norm_Bz_s <- sqrt(sum(s^2))
@@ -389,14 +435,22 @@ predict.sssvcqr <- function(object,
     }
   } else {
     unew <- .as_matrix(unew, n_new, "unew")
+    if (!is.numeric(k) || length(k) != 1L || !is.finite(k) || k < 1) {
+      stop("k must be a positive finite scalar.", call. = FALSE)
+    }
     k <- max(1L, min(as.integer(k), nrow(object$u)))
     nn <- FNN::get.knnx(data = object$u, query = unew, k = k)
-    idx <- if (k == 1L) {
-      nn$nn.index[, 1L]
+    if (k == 1L) {
+      idx <- nn$nn.index[, 1L]
+      delta_new <- object$delta[idx, , drop = FALSE]
     } else {
-      nn$nn.index[, 1L]
+      weights <- 1 / pmax(nn$nn.dist, .Machine$double.eps)
+      weights <- weights / rowSums(weights)
+      delta_new <- matrix(0, nrow = n_new, ncol = object$p)
+      for (i in seq_len(n_new)) {
+        delta_new[i, ] <- colSums(object$delta[nn$nn.index[i, ], , drop = FALSE] * weights[i, ])
+      }
     }
-    delta_new <- object$delta[idx, , drop = FALSE]
   }
 
   beta_local <- matrix(object$beta_G, nrow = n_new, ncol = object$p, byrow = TRUE) + delta_new
@@ -553,10 +607,30 @@ cv_ss_svcqr <- function(y,
   graph_symmetrize <- match.arg(graph_symmetrize)
   y <- as.numeric(y)
   n <- length(y)
+  if (n < 2L || anyNA(y) || any(!is.finite(y))) {
+    stop("y must contain at least two finite numeric values.", call. = FALSE)
+  }
+  if (!is.numeric(tau) || length(tau) != 1L || tau <= 0 || tau >= 1) {
+    stop("tau must be a scalar in (0, 1).", call. = FALSE)
+  }
   Z <- if (missing(Z) || is.null(Z)) matrix(nrow = n, ncol = 0L) else .as_matrix(Z, n, "Z")
   X <- .as_matrix(X, n, "X")
   u <- .as_matrix(u, n, "u")
   p <- ncol(X)
+  if (p < 1L) {
+    stop("X must contain at least one potentially local covariate.", call. = FALSE)
+  }
+  if (missing(lambda1_seq) || missing(lambda2_seq)) {
+    stop("lambda1_seq and lambda2_seq are required.", call. = FALSE)
+  }
+  if (!is.numeric(lambda1_seq) || !length(lambda1_seq) ||
+      anyNA(lambda1_seq) || any(!is.finite(lambda1_seq)) || any(lambda1_seq < 0)) {
+    stop("lambda1_seq must contain non-negative finite values.", call. = FALSE)
+  }
+  if (!is.numeric(lambda2_seq) || !length(lambda2_seq) ||
+      anyNA(lambda2_seq) || any(!is.finite(lambda2_seq)) || any(lambda2_seq < 0)) {
+    stop("lambda2_seq must contain non-negative finite values.", call. = FALSE)
+  }
 
   if (is.null(folds)) {
     folds <- make_spatial_folds(u, K = K_folds, method = "kmeans", seed = fold_seed)
@@ -567,6 +641,14 @@ cv_ss_svcqr <- function(y,
   }
   fold_ids <- sort(unique(folds))
 
+  if (!is.null(w)) {
+    w <- as.numeric(w)
+    if (length(w) != p || anyNA(w) || any(!is.finite(w)) || any(w < 0)) {
+      stop("w must be a non-negative numeric vector with length ncol(X).", call. = FALSE)
+    }
+  }
+
+  fold_weights <- vector("list", length(fold_ids))
   if (adaptive_weights && is.null(w)) {
     if (is.null(lambda1_pilot)) {
       lambda1_pilot <- min(lambda1_seq)
@@ -574,22 +656,44 @@ cv_ss_svcqr <- function(y,
     if (is.null(lambda2_pilot)) {
       lambda2_pilot <- max(lambda2_seq)
     }
-    if (verbose) {
-      message("Running pilot fit for adaptive weights.")
+    .check_nonnegative_scalar(lambda1_pilot, "lambda1_pilot")
+    .check_nonnegative_scalar(lambda2_pilot, "lambda2_pilot")
+    if (!is.numeric(a_stabilizer) || length(a_stabilizer) != 1L ||
+        !is.finite(a_stabilizer) || a_stabilizer <= 0) {
+      stop("a_stabilizer must be a positive finite scalar.", call. = FALSE)
     }
-    fit_pilot <- ss_svcqr(
-      y = y, Z = Z, X = X, u = u, tau = tau,
-      lambda1 = lambda1_pilot, lambda2 = lambda2_pilot,
-      k_nn = k_nn, w = NULL, control = control,
-      graph_normalized = graph_normalized,
-      graph_symmetrize = graph_symmetrize,
-      graph_sigma = graph_sigma
-    )
-    delta_pilot_norms <- apply(fit_pilot$delta, 2L, function(v) sqrt(sum(v^2)))
-    w <- 1 / (delta_pilot_norms + a_stabilizer)^gamma_power
-  }
-  if (is.null(w)) {
-    w <- rep(1, p)
+    if (!is.numeric(gamma_power) || length(gamma_power) != 1L ||
+        !is.finite(gamma_power) || gamma_power < 0) {
+      stop("gamma_power must be a non-negative finite scalar.", call. = FALSE)
+    }
+    if (verbose) {
+      message("Running fold-wise pilot fits for adaptive weights.")
+    }
+    for (f in seq_along(fold_ids)) {
+      idx_tr <- which(folds != fold_ids[f])
+      fit_pilot <- ss_svcqr(
+        y = y[idx_tr],
+        Z = Z[idx_tr, , drop = FALSE],
+        X = X[idx_tr, , drop = FALSE],
+        u = u[idx_tr, , drop = FALSE],
+        tau = tau,
+        lambda1 = lambda1_pilot,
+        lambda2 = lambda2_pilot,
+        k_nn = k_nn,
+        w = NULL,
+        control = control,
+        graph_normalized = graph_normalized,
+        graph_symmetrize = graph_symmetrize,
+        graph_sigma = graph_sigma
+      )
+      delta_pilot_norms <- apply(fit_pilot$delta, 2L, function(v) sqrt(sum(v^2)))
+      fold_weights[[f]] <- 1 / (delta_pilot_norms + a_stabilizer)^gamma_power
+    }
+  } else {
+    base_w <- if (is.null(w)) rep(1, p) else w
+    for (f in seq_along(fold_ids)) {
+      fold_weights[[f]] <- base_w
+    }
   }
 
   grid <- expand.grid(lambda1 = lambda1_seq, lambda2 = lambda2_seq)
@@ -620,7 +724,7 @@ cv_ss_svcqr <- function(y,
         lambda1 = l1,
         lambda2 = l2,
         k_nn = k_nn,
-        w = w,
+        w = fold_weights[[f]],
         control = control,
         graph_normalized = graph_normalized,
         graph_symmetrize = graph_symmetrize,
@@ -641,6 +745,23 @@ cv_ss_svcqr <- function(y,
   }
 
   best_idx <- which.min(cv_mean)
+  returned_weights <- if (!is.null(w)) {
+    w
+  } else if (adaptive_weights) {
+    fit_pilot <- ss_svcqr(
+      y = y, Z = Z, X = X, u = u, tau = tau,
+      lambda1 = if (is.null(lambda1_pilot)) min(lambda1_seq) else lambda1_pilot,
+      lambda2 = if (is.null(lambda2_pilot)) max(lambda2_seq) else lambda2_pilot,
+      k_nn = k_nn, w = NULL, control = control,
+      graph_normalized = graph_normalized,
+      graph_symmetrize = graph_symmetrize,
+      graph_sigma = graph_sigma
+    )
+    delta_pilot_norms <- apply(fit_pilot$delta, 2L, function(v) sqrt(sum(v^2)))
+    1 / (delta_pilot_norms + a_stabilizer)^gamma_power
+  } else {
+    rep(1, p)
+  }
   out <- list(
     grid = grid,
     cv_mean = cv_mean,
@@ -652,7 +773,7 @@ cv_ss_svcqr <- function(y,
       cv_sd = cv_sd[best_idx]
     ),
     folds = folds,
-    weights = w,
+    weights = returned_weights,
     tau = tau
   )
   class(out) <- "sssvcqr_cv"

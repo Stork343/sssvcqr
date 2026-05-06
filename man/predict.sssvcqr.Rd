@@ -4,7 +4,8 @@
 \description{
 Returns fitted quantiles or local coefficient surfaces from an SS-SVCQR model.
 For new locations, spatial deviations are extrapolated from nearest training
-locations.
+locations. If \code{k > 1}, inverse-distance weights average the \code{k}
+nearest fitted deviation vectors.
 }
 \usage{
 \method{predict}{sssvcqr}(object, Znew = NULL, Xnew = NULL, unew = NULL,
